@@ -1,0 +1,196 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions, Alert, AppState } from 'react-native';
+import { GestureHandlerRootView, PanGestureHandler } from 'react-native-gesture-handler';
+import Svg, { Rect } from 'react-native-svg';
+import mobileAds, { AppOpenAd, TestIds, AdEventType } from 'react-native-google-mobile-ads';
+
+const { width } = Dimensions.get('window');
+const GRID_SIZE = 15;
+const CELL_SIZE = Math.floor(width / GRID_SIZE);
+const BOARD_SIZE = CELL_SIZE * GRID_SIZE;
+
+const DIRECTIONS = {
+  UP: { x: 0, y: -1 },
+  DOWN: { x: 0, y: 1 },
+  LEFT: { x: -1, y: 0 },
+  RIGHT: { x: 1, y: 0 },
+};
+
+const APP_OPEN_AD_UNIT_ID = __DEV__
+? TestIds.APP_OPEN
+  : 'ca-app-pub-1768634789706309/1269803532';
+
+let appOpenAd = AppOpenAd.createForAdRequest(APP_OPEN_AD_UNIT_ID, {
+  requestNonPersonalizedAdsOnly: true,
+});
+
+export default function App() {
+  const [snake, setSnake] = useState([{ x: 7, y: 7 }]);
+  const [food, setFood] = useState({ x: 3, y: 3 });
+  const [direction, setDirection] = useState(DIRECTIONS.RIGHT);
+  const [isGameOver, setIsGameOver] = useState(false);
+  const [score, setScore] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [adLoaded, setAdLoaded] = useState(false);
+
+  const directionRef = useRef(direction);
+  const gameLoopRef = useRef(null);
+  const appState = useRef(AppState.currentState);
+
+  useEffect(() => {
+    mobileAds().initialize().then(() => loadAppOpenAd());
+
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        showAppOpenAd();
+      }
+      appState.current = nextAppState;
+    });
+
+    const unsubscribeLoaded = appOpenAd.addAdEventListener(AdEventType.LOADED, () => {
+      setAdLoaded(true);
+    });
+
+    const unsubscribeClosed = appOpenAd.addAdEventListener(AdEventType.CLOSED, () => {
+      setAdLoaded(false);
+      loadAppOpenAd();
+    });
+
+    setTimeout(() => showAppOpenAd(), 1000);
+
+    return () => {
+      subscription.remove();
+      unsubscribeLoaded();
+      unsubscribeClosed();
+    };
+  }, []);
+
+  const loadAppOpenAd = () => appOpenAd.load();
+  const showAppOpenAd = () => adLoaded? appOpenAd.show() : loadAppOpenAd();
+
+  const generateFood = () => ({
+    x: Math.floor(Math.random() * GRID_SIZE),
+    y: Math.floor(Math.random() * GRID_SIZE),
+  });
+
+  const resetGame = () => {
+    setSnake([{ x: 7, y: 7 }]);
+    setFood(generateFood());
+    setDirection(DIRECTIONS.RIGHT);
+    directionRef.current = DIRECTIONS.RIGHT;
+    setIsGameOver(false);
+    setScore(0);
+    setIsPaused(false);
+  };
+
+  const onGestureEvent = (event) => {
+    const { translationX, translationY } = event.nativeEvent;
+    if (Math.abs(translationX) > Math.abs(translationY)) {
+      if (translationX > 20 && directionRef.current!== DIRECTIONS.LEFT) {
+        directionRef.current = DIRECTIONS.RIGHT;
+      } else if (translationX < -20 && directionRef.current!== DIRECTIONS.RIGHT) {
+        directionRef.current = DIRECTIONS.LEFT;
+      }
+    } else {
+      if (translationY > 20 && directionRef.current!== DIRECTIONS.UP) {
+        directionRef.current = DIRECTIONS.DOWN;
+      } else if (translationY < -20 && directionRef.current!== DIRECTIONS.DOWN) {
+        directionRef.current = DIRECTIONS.UP;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isGameOver || isPaused) return;
+    gameLoopRef.current = setInterval(() => {
+      setSnake((prevSnake) => {
+        const newSnake = [...prevSnake];
+        const head = {...newSnake[0] };
+        head.x += directionRef.current.x;
+        head.y += directionRef.current.y;
+
+        if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
+          setIsGameOver(true);
+          return prevSnake;
+        }
+
+        if (newSnake.some(segment => segment.x === head.x && segment.y === head.y)) {
+          setIsGameOver(true);
+          return prevSnake;
+        }
+
+        newSnake.unshift(head);
+        if (head.x === food.x && head.y === food.y) {
+          setFood(generateFood());
+          setScore(s => s + 10);
+        } else {
+          newSnake.pop();
+        }
+        return newSnake;
+      });
+    }, 200);
+    return () => clearInterval(gameLoopRef.current);
+  }, [food, isGameOver, isPaused]);
+
+  useEffect(() => {
+    if (isGameOver) {
+      showAppOpenAd();
+      Alert.alert('Game Over', `Tera Score: ${score}`, [
+        { text: 'Restart', onPress: resetGame }
+      ]);
+    }
+  }, [isGameOver]);
+
+  return (
+    <GestureHandlerRootView style={styles.container}>
+      <PanGestureHandler onGestureEvent={onGestureEvent}>
+        <View style={styles.gameContainer}>
+          <Text style={styles.title}>Snake Game</Text>
+          <Text style={styles.score}>Score: {score}</Text>
+          <View style={[styles.board, { width: BOARD_SIZE, height: BOARD_SIZE }]}>
+            <Svg height={BOARD_SIZE} width={BOARD_SIZE}>
+              {snake.map((segment, index) => (
+                <Rect
+                  key={index}
+                  x={segment.x * CELL_SIZE}
+                  y={segment.y * CELL_SIZE}
+                  width={CELL_SIZE - 1}
+                  height={CELL_SIZE - 1}
+                  fill={index === 0? '#2E7D32' : '#4CAF50'}
+                />
+              ))}
+              <Rect
+                x={food.x * CELL_SIZE}
+                y={food.y * CELL_SIZE}
+                width={CELL_SIZE - 1}
+                height={CELL_SIZE - 1}
+                fill="#F44336"
+              />
+            </Svg>
+          </View>
+          <View style={styles.controls}>
+            <TouchableOpacity style={styles.button} onPress={() => setIsPaused(!isPaused)}>
+              <Text style={styles.buttonText}>{isPaused? 'Resume' : 'Pause'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={resetGame}>
+              <Text style={styles.buttonText}>Restart</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.hint}>Swipe karke direction change kar</Text>
+        </View>
+      </PanGestureHandler>
+    </GestureHandlerRootView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#121212' },
+  gameContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 50 },
+  title: { fontSize: 32, fontWeight: 'bold', color: '#fff', marginBottom: 10 },
+  score: { fontSize: 20, color: '#fff', marginBottom: 20 },
+  board: { backgroundColor: '#1E1E1E', borderWidth: 2, borderColor: '#333' },
+  controls: { flexDirection: 'row', marginTop: 30, gap: 20 },
+  button: { backgroundColor: '#4CAF50', paddingHorizontal: 25, paddingVertical: 12, borderRadius: 8 },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  hint: { color: '#888', marginTop: 20, fontSize: 14 },
+});
